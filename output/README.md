@@ -1,5 +1,5 @@
-# Output
+# output
 
-This folder is used for generated tables, figures, and robustness outputs.
+This folder stores generated tables, figures, logs, and intermediate files.
 
-Generated output files are not included in the repository by default.
+Generated outputs are ignored by Git.
