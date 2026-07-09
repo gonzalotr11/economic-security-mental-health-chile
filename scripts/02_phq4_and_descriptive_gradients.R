@@ -481,20 +481,21 @@ full_phq4_gradients <- dplyr::bind_rows(
 
 selected_descriptive_gradients <- full_phq4_gradients %>%
   dplyr::filter(variable %in% selected_table_1_vars) %>%
-  dplyr::select(
-    domain,
-    variable_label,
-    category,
-    unweighted_n,
-    weighted_pct,
-    mean_phq4
-  ) %>%
   dplyr::arrange(
     factor(
       variable,
       levels = selected_table_1_vars
     ),
     category
+  ) %>%
+  dplyr::select(
+    domain,
+    variable,
+    variable_label,
+    category,
+    unweighted_n,
+    weighted_pct,
+    mean_phq4
   )
 
 
@@ -682,16 +683,16 @@ output_excel <- file.path(
 openxlsx::write.xlsx(
   list(
     sample_summary = sample_summary,
-    phq4_outcome_role = phq4_outcome_role,
-    phq4_distribution_summary = phq4_distribution_summary,
-    phq4_score_distribution = phq4_score_distribution,
-    phq4_severity_distribution = phq4_severity_distribution,
-    phq4_item_summaries = phq4_item_summaries,
+    outcome_role = phq4_outcome_role,
+    phq4_summary = phq4_distribution_summary,
+    phq4_scores = phq4_score_distribution,
+    phq4_severity = phq4_severity_distribution,
+    phq4_items = phq4_item_summaries,
     phq4_reliability = phq4_reliability,
-    selected_descriptive_gradients = selected_descriptive_gradients,
-    full_phq4_gradients = full_phq4_gradients,
-    objective_phq4_gradients = objective_phq4_gradients,
-    subjective_security_phq4_gradients = subjective_security_phq4_gradients
+    selected_gradients = selected_descriptive_gradients,
+    full_gradients = full_phq4_gradients,
+    objective_gradients = objective_phq4_gradients,
+    subjective_gradients = subjective_security_phq4_gradients
   ),
   file = output_excel,
   overwrite = TRUE
