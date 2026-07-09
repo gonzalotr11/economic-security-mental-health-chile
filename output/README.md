@@ -8,3 +8,10 @@ After running the full pipeline with:
 
 ```r
 source("scripts/run_all.R")
+```
+
+the final paper-ready materials will be available in:
+
+```text
+output/08_paper_ready_tables_figures/
+```
