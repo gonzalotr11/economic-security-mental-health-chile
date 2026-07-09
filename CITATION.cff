@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "Replication code for: Beyond Socioeconomic Gradients"
+title: "Replication code for: Beyond Socioeconomic Gradients: Subjective Economic Security and Heterogeneity in Psychological Distress"
 message: "If you use this code, please cite the associated article and this repository."
 type: software
 authors:
@@ -8,3 +8,9 @@ authors:
     orcid: "https://orcid.org/0000-0002-9612-2787"
 repository-code: "https://github.com/gonzalotr11/economic-security-mental-health-chile"
 license: MIT
+keywords:
+  - subjective economic security
+  - psychological distress
+  - socioeconomic gradients
+  - PHQ-4
+  - Chile
