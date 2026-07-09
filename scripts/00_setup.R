@@ -43,7 +43,6 @@ required_packages <- c(
   "purrr",
   "forcats",
   "survey",
-  "srvyr",
   "broom",
   "scales"
 )
