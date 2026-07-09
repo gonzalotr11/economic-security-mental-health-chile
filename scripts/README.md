@@ -4,7 +4,21 @@ This folder contains the R scripts used to reproduce the analysis for the articl
 
 The scripts are designed to be run from the root of the repository, not from inside this folder.
 
-## Expected workflow
+Raw data are not included in this repository. To run the pipeline, place the official EBS 2023 data file in `data_raw/` using the expected file name documented in `data_raw/README.md`.
+
+## Running the full pipeline
+
+After confirming that the raw data file is in `data_raw/`, the full analysis can be run from the repository root with:
+
+```r
+source("scripts/run_all.R")
+```
+
+Generated files are written to `output/`. These outputs are ignored by Git and are not included in the public repository.
+
+## Running scripts individually
+
+For debugging or step-by-step replication, the scripts can also be run one by one in numerical order:
 
 ```r
 source("scripts/00_setup.R")
@@ -17,8 +31,6 @@ source("scripts/06_configurational_diagnostics_expected_residual.R")
 source("scripts/07_robustness_sensitivity_checks.R")
 source("scripts/08_paper_ready_tables_figures.R")
 ```
-
-Raw data are not included in this repository. To run the pipeline, place the official EBS 2023 data file in `data_raw/` using the expected file name documented in `data_raw/README.md`.
 
 ## Script overview
 
@@ -33,13 +45,7 @@ Raw data are not included in this repository. To run the pipeline, place the off
 | `06_configurational_diagnostics_expected_residual.R` | Constructs expected-residual configurations and describes subjective-security profiles within them. |
 | `07_robustness_sensitivity_checks.R` | Runs robustness and sensitivity checks for thresholds, model specifications, and alternative definitions. |
 | `08_paper_ready_tables_figures.R` | Curates final figures, tables, inventories, and reporting notes for the manuscript and supplement. |
+| `run_all.R` | Runs the full replication pipeline from `01_data_preparation.R` to `08_paper_ready_tables_figures.R`. |
 
-## Running the full pipeline
 
-After confirming that the raw data file is in `data_raw/`, the full analysis can be run with:
 
-```r
-source("scripts/run_all.R")
-```
-
-Generated files are written to `output/`. These outputs are ignored by Git and are not included in the public repository.
