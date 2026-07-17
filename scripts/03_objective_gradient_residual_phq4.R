@@ -1,92 +1,276 @@
 # ============================================================
 # 03_objective_gradient_residual_phq4.R
-# Project: Economic Security and Mental Health in Chile
+# Project: Subjective economic security and psychological distress in Chile
 # Purpose: Estimate objective-position gradients and construct residual PHQ-4
-# Author: Gonzalo Torres-Rosales
+# Author: GT / ChatGPT
 # ============================================================
 
 # ------------------------------------------------------------
-# 01. Setup
+# 00. Instructions
 # ------------------------------------------------------------
+# This script is the fourth step of the rebuilt analysis pipeline.
+# It starts from the analytic dataset produced by:
+#
+#   output_01_construct_rebuild_variables/rds/01_ebs_rebuild_analytic.rds
+#
+# Main conceptual goal:
+#   Estimate the objective socioeconomic gradient in PHQ-4 and construct
+#   objective-position-predicted PHQ-4 and residual PHQ-4.
+#
+# In the new paper strategy:
+#   - The objective-position model defines the expected level of psychological
+#     distress given social and economic position.
+#   - The residual captures psychological distress above or below what would be
+#     expected from objective position.
+#   - Later scripts use this residual to analyze within-gradient heterogeneity,
+#     subjective economic security, and convergence/mismatch configurations.
+#
+# This script estimates:
+#   M0: Intercept-only model
+#   M1: Conventional SES model
+#       income + education + housing tenure
+#   M2: M1 + life-labor stage
+#   M3: Expanded objective-position model
+#       income + education + housing tenure + life-labor stage +
+#       health system + housing deprivation + territorial insecurity +
+#       sex + macrozone
+#
+# Main outputs:
+#   1. Objective model coefficients and fit summaries.
+#   2. PHQ-4 expected from the expanded objective-position model.
+#   3. PHQ-4 residual and standardized residual.
+#   4. Residual position categories using +/- 0.50 SD.
+#   5. Sensitivity residual categories using +/- 0.75 SD.
+#   6. Expected PHQ-4 terciles.
+#   7. Residual diagnostics and figures.
+#
+# Output folder:
+#   output_03_objective_gradient_residual_phq4
+#
+# Main files:
+#   rds/03_objective_gradient_residual_dataset.rds
+#   rds/03_objective_model_objects.rds
+#   tables/03_objective_gradient_residual_tables.xlsx
+#   figures/03_objective_gradient_phq4.png
+#   figures/03_expected_phq4_distribution.png
+#   figures/03_residual_phq4_distribution.png
+#   figures/03_observed_expected_residual_by_objective_position.png
 
-source("scripts/00_setup.R")
+# ============================================================
+# 01. Packages
+# ============================================================
 
+required_packages <- c(
+  "tidyverse",
+  "haven",
+  "labelled",
+  "janitor",
+  "openxlsx",
+  "survey",
+  "broom",
+  "stringr",
+  "forcats",
+  "scales",
+  "patchwork"
+)
+
+installed_packages <- rownames(installed.packages())
+packages_to_install <- setdiff(required_packages, installed_packages)
+
+if (length(packages_to_install) > 0) {
+  install.packages(packages_to_install)
+}
+
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+options(scipen = 999)
+options(dplyr.summarise.inform = FALSE)
 options(survey.lonely.psu = "adjust")
+
+
+# ============================================================
+# 02. Paths
+# ============================================================
 
 script_name <- "03_objective_gradient_residual_phq4"
 
-script_output_dir  <- file.path(output_dir, script_name)
-script_tables_dir  <- file.path(script_output_dir, "tables")
-script_figures_dir <- file.path(script_output_dir, "figures")
-script_csv_dir     <- file.path(script_output_dir, "csv")
-script_rds_dir     <- file.path(script_output_dir, "rds")
-script_logs_dir    <- file.path(script_output_dir, "logs")
-
-dirs_to_create <- c(
-  script_output_dir,
-  script_tables_dir,
-  script_figures_dir,
-  script_csv_dir,
-  script_rds_dir,
-  script_logs_dir
+possible_base_paths <- c(
+  getwd(),
+  "C:/Users/PC/OneDrive/Publicaciones/Subj Econ Hardship in the middle/Data",
+  "D:/OneDrive/Publicaciones/Subj Econ Hardship in the middle/Data",
+  "C:/Users/Gonzalo/OneDrive/Publicaciones/Subj Econ Hardship in the middle/Data",
+  "C:/Users/gonza/OneDrive/Publicaciones/Subj Econ Hardship in the middle/Data",
+  "C:/Users/gonzalotr/OneDrive/Publicaciones/Subj Econ Hardship in the middle/Data"
 )
 
-invisible(
-  purrr::walk(
-    dirs_to_create,
-    ~ dir.create(.x, recursive = TRUE, showWarnings = FALSE)
-  )
-)
+possible_base_paths <- unique(possible_base_paths)
 
-message("Running: ", script_name)
-message("Output folder: ", script_output_dir)
+base_path <- possible_base_paths[file.exists(possible_base_paths)][1]
 
-
-# ------------------------------------------------------------
-# 02. Load analytic data from script 01
-# ------------------------------------------------------------
-
-input_rds <- file.path(
-  output_dir,
-  "01_data_preparation",
-  "rds",
-  "01_ebs_analytic.rds"
-)
-
-variable_groups_path <- file.path(
-  output_dir,
-  "01_data_preparation",
-  "rds",
-  "01_variable_groups.rds"
-)
-
-if (!file.exists(input_rds)) {
+if (is.na(base_path) || length(base_path) == 0) {
   stop(
-    paste0(
-      "Input analytic dataset not found: ", input_rds, "\n",
-      "Run scripts/01_data_preparation.R first."
-    )
+    "No valid base path was found. Please add your current OneDrive data path to `possible_base_paths`."
   )
 }
+
+input_01_dir <- file.path(base_path, "output_01_construct_rebuild_variables")
+input_02_dir <- file.path(base_path, "output_02_phq4_and_validation_outcomes")
+
+input_rds_candidates <- c(
+  file.path(input_01_dir, "rds", "01_ebs_rebuild_analytic.rds"),
+  file.path(input_01_dir, "01_ebs_rebuild_analytic.rds")
+)
+
+input_rds <- input_rds_candidates[file.exists(input_rds_candidates)][1]
+
+if (is.na(input_rds) || length(input_rds) == 0) {
+  stop(
+    "Input analytic dataset not found. Run 01_construct_rebuild_variables.R first.\n",
+    "Expected one of:\n",
+    paste(input_rds_candidates, collapse = "\n")
+  )
+}
+
+variable_groups_candidates <- c(
+  file.path(input_01_dir, "rds", "01_variable_groups_rebuild.rds"),
+  file.path(input_01_dir, "01_variable_groups_rebuild.rds")
+)
+
+variable_groups_path <- variable_groups_candidates[file.exists(variable_groups_candidates)][1]
+
+output_dir <- file.path(base_path, paste0("output_", script_name))
+
+output_tables_dir  <- file.path(output_dir, "tables")
+output_figures_dir <- file.path(output_dir, "figures")
+output_csv_dir     <- file.path(output_dir, "csv")
+output_rds_dir     <- file.path(output_dir, "rds")
+output_logs_dir    <- file.path(output_dir, "logs")
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_tables_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_figures_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_csv_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_rds_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_logs_dir, recursive = TRUE, showWarnings = FALSE)
+
+message("Using base path: ", base_path)
+message("Using input dataset: ", input_rds)
+message("Using output folder: ", output_dir)
+
+
+# ============================================================
+# 03. Global plotting style and article palette
+# ============================================================
+
+article_palette <- c(
+  purple_dark   = "#5B2A86",
+  purple_mid    = "#8E44AD",
+  purple_light  = "#C77DCC",
+  mustard_dark  = "#D4A000",
+  mustard_mid   = "#E0B43B",
+  mustard_light = "#F3E6B3",
+  grey_dark     = "#4D4D4D",
+  grey_mid      = "#8A8A8A",
+  grey_light    = "#D9D9D9"
+)
+
+article_discrete_palette <- c(
+  article_palette["purple_dark"],
+  article_palette["purple_mid"],
+  article_palette["purple_light"],
+  article_palette["mustard_dark"],
+  article_palette["mustard_mid"],
+  article_palette["mustard_light"],
+  article_palette["grey_dark"],
+  article_palette["grey_mid"],
+  article_palette["grey_light"]
+)
+
+expected_phq4_palette <- c(
+  "Low expected distress" = article_palette["purple_light"],
+  "Intermediate expected distress" = article_palette["purple_mid"],
+  "High expected distress" = article_palette["purple_dark"]
+)
+
+residual_position_palette <- c(
+  "Lower than expected distress" = article_palette["mustard_light"],
+  "Close to expected distress" = article_palette["grey_light"],
+  "Higher than expected distress" = article_palette["purple_dark"]
+)
+
+main_theme <- function(base_size = 16) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(
+        face = "bold",
+        size = base_size + 4,
+        color = article_palette["grey_dark"]
+      ),
+      plot.subtitle = ggplot2::element_text(
+        size = base_size,
+        color = article_palette["grey_dark"]
+      ),
+      plot.caption = ggplot2::element_text(
+        size = base_size - 3,
+        color = article_palette["grey_mid"],
+        hjust = 0
+      ),
+      axis.title = ggplot2::element_text(
+        size = base_size,
+        color = article_palette["grey_dark"]
+      ),
+      axis.text = ggplot2::element_text(
+        size = base_size - 1,
+        color = article_palette["grey_dark"]
+      ),
+      legend.title = ggplot2::element_text(
+        size = base_size - 1,
+        color = article_palette["grey_dark"]
+      ),
+      legend.text = ggplot2::element_text(
+        size = base_size - 2,
+        color = article_palette["grey_dark"]
+      ),
+      strip.text = ggplot2::element_text(
+        face = "bold",
+        size = base_size - 1,
+        color = article_palette["grey_dark"]
+      ),
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_line(
+        color = article_palette["grey_light"],
+        linewidth = 0.25
+      ),
+      panel.grid.major.y = ggplot2::element_line(
+        color = article_palette["grey_light"],
+        linewidth = 0.25
+      ),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      legend.background = ggplot2::element_rect(fill = "white", color = NA),
+      legend.position = "bottom"
+    )
+}
+
+
+# ============================================================
+# 04. Load analytic dataset
+# ============================================================
 
 analytic <- readRDS(input_rds) %>%
   janitor::clean_names()
 
-if (file.exists(variable_groups_path)) {
+if (!is.na(variable_groups_path) && length(variable_groups_path) > 0) {
   variable_groups <- readRDS(variable_groups_path)
 } else {
   variable_groups <- list()
-  warning("Variable groups file not found. Proceeding with internal variable definitions.")
 }
 
 required_design_vars <- c("weight", "strata", "psu")
 missing_design_vars <- setdiff(required_design_vars, names(analytic))
 
 if (length(missing_design_vars) > 0) {
-  stop(
-    "Missing survey design variables: ",
-    paste(missing_design_vars, collapse = ", ")
-  )
+  stop("Missing survey design variables: ", paste(missing_design_vars, collapse = ", "))
 }
 
 analytic <- analytic %>%
@@ -97,9 +281,9 @@ analytic <- analytic %>%
   )
 
 
-# ------------------------------------------------------------
-# 03. Variable definitions
-# ------------------------------------------------------------
+# ============================================================
+# 05. Variable definitions
+# ============================================================
 
 outcome_var <- "phq4_score"
 
@@ -111,8 +295,7 @@ m0_vars <- character(0)
 
 m1_vars <- c(
   "income_group_3cat_f",
-  "education_3cat_f",
-  "housing_tenure_3cat_f"
+  "education_3cat_f"
 )
 
 m2_vars <- c(
@@ -179,75 +362,24 @@ objective_group_labels <- c(
 )
 
 
-# ------------------------------------------------------------
-# 04. Plot style
-# ------------------------------------------------------------
+# ============================================================
+# 06. Helper functions
+# ============================================================
 
-article_palette <- c(
-  purple_dark   = "#5B2A86",
-  purple_mid    = "#8E44AD",
-  purple_light  = "#C77DCC",
-  mustard_dark  = "#D4A000",
-  mustard_mid   = "#E0B43B",
-  mustard_light = "#F3E6B3",
-  grey_dark     = "#4D4D4D",
-  grey_mid      = "#8A8A8A",
-  grey_light    = "#D9D9D9"
-)
-
-expected_phq4_palette <- c(
-  "Low expected distress" = article_palette["purple_light"],
-  "Intermediate expected distress" = article_palette["purple_mid"],
-  "High expected distress" = article_palette["purple_dark"]
-)
-
-residual_position_palette <- c(
-  "Lower than expected distress" = article_palette["mustard_light"],
-  "Close to expected distress" = article_palette["grey_light"],
-  "Higher than expected distress" = article_palette["purple_dark"]
-)
-
-main_theme <- function(base_size = 13) {
-  ggplot2::theme_minimal(base_size = base_size) +
-    ggplot2::theme(
-      plot.title = ggplot2::element_text(
-        face = "bold",
-        size = base_size + 3,
-        color = article_palette["grey_dark"]
-      ),
-      plot.subtitle = ggplot2::element_text(
-        size = base_size,
-        color = article_palette["grey_dark"]
-      ),
-      plot.caption = ggplot2::element_text(
-        size = base_size - 3,
-        color = article_palette["grey_mid"],
-        hjust = 0
-      ),
-      axis.title = ggplot2::element_text(
-        size = base_size,
-        color = article_palette["grey_dark"]
-      ),
-      axis.text = ggplot2::element_text(
-        size = base_size - 1,
-        color = article_palette["grey_dark"]
-      ),
-      strip.text = ggplot2::element_text(
-        face = "bold",
-        size = base_size - 1,
-        color = article_palette["grey_dark"]
-      ),
-      panel.grid.minor = ggplot2::element_blank(),
-      legend.position = "bottom"
-    )
+weighted_mean_approx <- function(x, w) {
+  ok <- !is.na(x) & !is.na(w)
+  if (sum(ok) == 0) return(NA_real_)
+  stats::weighted.mean(x[ok], w[ok], na.rm = TRUE)
 }
 
+weighted_sd_approx <- function(x, w) {
+  ok <- !is.na(x) & !is.na(w)
+  if (sum(ok) == 0) return(NA_real_)
+  m <- stats::weighted.mean(x[ok], w[ok], na.rm = TRUE)
+  sqrt(stats::weighted.mean((x[ok] - m)^2, w[ok], na.rm = TRUE))
+}
 
-# ------------------------------------------------------------
-# 05. Helper functions
-# ------------------------------------------------------------
-
-weighted_quantile <- function(x, w, probs = c(0.10, 0.25, 0.50, 0.75, 0.90)) {
+weighted_quantile <- function(x, w, probs = c(0.1, 0.25, 0.5, 0.75, 0.9)) {
   ok <- !is.na(x) & !is.na(w)
   
   if (sum(ok) == 0) {
@@ -335,13 +467,7 @@ rmse_weighted <- function(observed, predicted, weights) {
     return(NA_real_)
   }
   
-  sqrt(
-    stats::weighted.mean(
-      (observed[ok] - predicted[ok])^2,
-      weights[ok],
-      na.rm = TRUE
-    )
-  )
+  sqrt(stats::weighted.mean((observed[ok] - predicted[ok])^2, weights[ok], na.rm = TRUE))
 }
 
 mae_weighted <- function(observed, predicted, weights) {
@@ -351,11 +477,7 @@ mae_weighted <- function(observed, predicted, weights) {
     return(NA_real_)
   }
   
-  stats::weighted.mean(
-    abs(observed[ok] - predicted[ok]),
-    weights[ok],
-    na.rm = TRUE
-  )
+  stats::weighted.mean(abs(observed[ok] - predicted[ok]), weights[ok], na.rm = TRUE)
 }
 
 tidy_svyglm <- function(model, model_name) {
@@ -381,6 +503,7 @@ tidy_svyglm <- function(model, model_name) {
 
 model_fit_summary <- function(model_object, data, outcome, model_name) {
   model_frame <- stats::model.frame(model_object)
+  
   included_rows <- as.integer(rownames(model_frame))
   
   predicted <- rep(NA_real_, nrow(data))
@@ -389,15 +512,12 @@ model_fit_summary <- function(model_object, data, outcome, model_name) {
   observed <- data[[outcome]]
   weights <- data$weight
   
-  residuals_model <- observed[included_rows] - predicted[included_rows]
-  
   tibble::tibble(
     model = model_name,
     n_unweighted = length(included_rows),
     weighted_n = sum(weights[included_rows], na.rm = TRUE),
     mean_observed = weighted_mean_approx(observed[included_rows], weights[included_rows]),
     mean_predicted = weighted_mean_approx(predicted[included_rows], weights[included_rows]),
-    residual_sd = weighted_sd_approx(residuals_model, weights[included_rows]),
     r2_weighted = r2_weighted(observed, predicted, weights),
     rmse_weighted = rmse_weighted(observed, predicted, weights),
     mae_weighted = mae_weighted(observed, predicted, weights)
@@ -449,25 +569,21 @@ weighted_mean_by_group <- function(data, value_var, group_var, weight_var = "wei
 }
 
 
-# ------------------------------------------------------------
-# 06. Prepare model sample and survey design
-# ------------------------------------------------------------
+# ============================================================
+# 07. Prepare model sample and survey design
+# ============================================================
 
-model_core_vars <- unique(
-  c(
-    outcome_var,
-    m3_vars,
-    "weight",
-    "strata",
-    "psu"
-  )
-)
+model_core_vars <- unique(c(
+  outcome_var,
+  m3_vars,
+  "weight",
+  "strata",
+  "psu"
+))
 
 analytic_model <- analytic %>%
   dplyr::mutate(
-    objective_model_complete = stats::complete.cases(
-      dplyr::across(dplyr::all_of(model_core_vars))
-    )
+    objective_model_complete = stats::complete.cases(dplyr::across(dplyr::all_of(model_core_vars)))
   )
 
 design_full <- survey::svydesign(
@@ -478,10 +594,7 @@ design_full <- survey::svydesign(
   nest = TRUE
 )
 
-design_m3_complete <- subset(
-  design_full,
-  objective_model_complete
-)
+design_m3_complete <- subset(design_full, objective_model_complete)
 
 model_sample_summary <- tibble::tibble(
   sample_definition = c(
@@ -502,9 +615,9 @@ model_sample_summary <- tibble::tibble(
 )
 
 
-# ------------------------------------------------------------
-# 07. Estimate objective-position models
-# ------------------------------------------------------------
+# ============================================================
+# 08. Estimate objective-position models
+# ============================================================
 
 formula_m0 <- make_formula(outcome_var, m0_vars)
 formula_m1 <- make_formula(outcome_var, m1_vars)
@@ -557,16 +670,13 @@ model_fit <- dplyr::bind_rows(
 ) %>%
   dplyr::mutate(
     r2_change_from_previous = r2_weighted - dplyr::lag(r2_weighted),
-    r2_change_from_m0 = r2_weighted - r2_weighted[model == "M0 Intercept only"],
-    r2_weighted_pct = r2_weighted * 100,
-    r2_change_from_previous_pp = r2_change_from_previous * 100,
-    r2_change_from_m0_pp = r2_change_from_m0 * 100
+    r2_change_from_m0 = r2_weighted - r2_weighted[model == "M0 Intercept only"]
   )
 
 
-# ------------------------------------------------------------
-# 08. Construct expected and residual PHQ-4
-# ------------------------------------------------------------
+# ============================================================
+# 09. Construct expected and residual PHQ-4
+# ============================================================
 
 m3_model_frame <- stats::model.frame(model_m3)
 m3_included_rows <- as.integer(rownames(m3_model_frame))
@@ -633,22 +743,6 @@ analytic_residual <- analytic_residual %>%
       )
     ),
     
-    phq4_residual_position_100_f = dplyr::case_when(
-      phq4_residual_objective_z <= -1.00 ~ "Lower than expected distress",
-      phq4_residual_objective_z >= 1.00 ~ "Higher than expected distress",
-      !is.na(phq4_residual_objective_z) ~ "Close to expected distress",
-      TRUE ~ NA_character_
-    ),
-    
-    phq4_residual_position_100_f = factor(
-      phq4_residual_position_100_f,
-      levels = c(
-        "Lower than expected distress",
-        "Close to expected distress",
-        "Higher than expected distress"
-      )
-    ),
-    
     higher_than_expected = dplyr::case_when(
       phq4_residual_position_f == "Higher than expected distress" ~ 1,
       phq4_residual_position_f %in% c(
@@ -683,6 +777,7 @@ analytic_residual <- analytic_residual %>%
     )
   )
 
+# Expected PHQ-4 terciles are created within the M3 complete sample.
 expected_tercile_breaks <- stats::quantile(
   analytic_residual$phq4_expected_objective,
   probs = c(0, 1 / 3, 2 / 3, 1),
@@ -690,6 +785,7 @@ expected_tercile_breaks <- stats::quantile(
   names = FALSE
 )
 
+# Make breaks unique in case of ties.
 expected_tercile_breaks <- unique(expected_tercile_breaks)
 
 if (length(expected_tercile_breaks) < 4) {
@@ -728,34 +824,18 @@ if (length(expected_tercile_breaks) < 4) {
     )
 }
 
+# Backward-compatible aliases for older scripts.
 analytic_residual <- analytic_residual %>%
   dplyr::mutate(
-    phq4_expected_low_intermediate_vs_high_f = dplyr::case_when(
-      phq4_expected_tercile_f %in% c(
-        "Low expected distress",
-        "Intermediate expected distress"
-      ) ~ "Low/intermediate expected distress",
-      phq4_expected_tercile_f == "High expected distress" ~ "High expected distress",
-      TRUE ~ NA_character_
-    ),
-    
-    phq4_expected_low_intermediate_vs_high_f = factor(
-      phq4_expected_low_intermediate_vs_high_f,
-      levels = c(
-        "Low/intermediate expected distress",
-        "High expected distress"
-      )
-    ),
-    
     phq4_score_expected_m3 = phq4_expected_objective,
     phq4_score_residual_m3 = phq4_residual_objective,
     phq4_score_residual_m3_z = phq4_residual_objective_z
   )
 
 
-# ------------------------------------------------------------
-# 09. Residual diagnostics
-# ------------------------------------------------------------
+# ============================================================
+# 10. Residual diagnostics
+# ============================================================
 
 residual_diagnostics <- analytic_residual %>%
   dplyr::summarise(
@@ -776,13 +856,6 @@ residual_diagnostics <- analytic_residual %>%
     mean_expected_phq4_weighted = weighted_mean_approx(phq4_expected_objective, weight),
     mean_residual_phq4_weighted = weighted_mean_approx(phq4_residual_objective, weight),
     sd_residual_phq4_weighted = weighted_sd_approx(phq4_residual_objective, weight),
-    p10_expected = weighted_quantile(phq4_expected_objective, weight, probs = 0.10)[1],
-    p25_expected = weighted_quantile(phq4_expected_objective, weight, probs = 0.25)[1],
-    median_expected = weighted_quantile(phq4_expected_objective, weight, probs = 0.50)[1],
-    p75_expected = weighted_quantile(phq4_expected_objective, weight, probs = 0.75)[1],
-    p90_expected = weighted_quantile(phq4_expected_objective, weight, probs = 0.90)[1],
-    min_expected = min(phq4_expected_objective, na.rm = TRUE),
-    max_expected = max(phq4_expected_objective, na.rm = TRUE),
     p10_residual = weighted_quantile(phq4_residual_objective, weight, probs = 0.10)[1],
     p25_residual = weighted_quantile(phq4_residual_objective, weight, probs = 0.25)[1],
     median_residual = weighted_quantile(phq4_residual_objective, weight, probs = 0.50)[1],
@@ -853,18 +926,6 @@ residual_position_075_distribution <- analytic_residual %>%
     weighted_pct = 100 * weighted_n / sum(weighted_n)
   )
 
-residual_position_100_distribution <- analytic_residual %>%
-  dplyr::filter(!is.na(phq4_residual_position_100_f), !is.na(weight)) %>%
-  dplyr::group_by(phq4_residual_position_100_f) %>%
-  dplyr::summarise(
-    unweighted_n = dplyr::n(),
-    weighted_n = sum(weight, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    weighted_pct = 100 * weighted_n / sum(weighted_n)
-  )
-
 expected_tercile_distribution <- analytic_residual %>%
   dplyr::filter(!is.na(phq4_expected_tercile_f), !is.na(weight)) %>%
   dplyr::group_by(phq4_expected_tercile_f) %>%
@@ -882,9 +943,9 @@ expected_tercile_distribution <- analytic_residual %>%
   )
 
 
-# ------------------------------------------------------------
-# 10. Objective-position descriptive gradients
-# ------------------------------------------------------------
+# ============================================================
+# 11. Objective-position descriptive gradients
+# ============================================================
 
 phq4_objective_gradients <- purrr::map_dfr(
   objective_group_vars_for_descriptives,
@@ -934,8 +995,12 @@ observed_expected_residual_by_objective <- purrr::map_dfr(
   )
 
 
+# ============================================================
+# 12. Figures
+# ============================================================
+
 # ------------------------------------------------------------
-# 11. Figures
+# 12.1 Model R2 figure
 # ------------------------------------------------------------
 
 p_model_fit <- ggplot2::ggplot(
@@ -956,7 +1021,11 @@ p_model_fit <- ggplot2::ggplot(
     x = NULL,
     y = "Weighted R-squared (%)"
   ) +
-  main_theme(base_size = 13)
+  main_theme(base_size = 15)
+
+# ------------------------------------------------------------
+# 12.2 PHQ-4 objective gradient figure
+# ------------------------------------------------------------
 
 gradient_plot_groups <- c(
   "income_group_3cat_f",
@@ -991,7 +1060,7 @@ p_objective_gradient <- ggplot2::ggplot(
   )
 ) +
   ggplot2::geom_point(
-    size = 3.4,
+    size = 3.8,
     color = article_palette["purple_dark"]
   ) +
   ggplot2::facet_wrap(
@@ -1005,7 +1074,11 @@ p_objective_gradient <- ggplot2::ggplot(
     x = "Weighted mean PHQ-4",
     y = NULL
   ) +
-  main_theme(base_size = 12)
+  main_theme(base_size = 15)
+
+# ------------------------------------------------------------
+# 12.3 Expected PHQ-4 distribution
+# ------------------------------------------------------------
 
 p_expected_distribution <- ggplot2::ggplot(
   analytic_residual %>%
@@ -1018,12 +1091,16 @@ p_expected_distribution <- ggplot2::ggplot(
     color = "white"
   ) +
   ggplot2::labs(
-    title = "Distribution of objective-position expected PHQ-4",
+    title = "Distribution of objective-position-expected PHQ-4",
     subtitle = "Predicted values from the expanded objective-position model",
     x = "Expected PHQ-4",
     y = "Weighted count"
   ) +
-  main_theme(base_size = 13)
+  main_theme(base_size = 15)
+
+# ------------------------------------------------------------
+# 12.4 Residual PHQ-4 distribution
+# ------------------------------------------------------------
 
 p_residual_distribution <- ggplot2::ggplot(
   analytic_residual %>%
@@ -1042,14 +1119,15 @@ p_residual_distribution <- ggplot2::ggplot(
   ) +
   ggplot2::labs(
     title = "Distribution of residual PHQ-4",
-    subtitle = "Observed PHQ-4 minus objective-position expected PHQ-4",
+    subtitle = "Observed PHQ-4 minus objective-position-expected PHQ-4",
     x = "Residual PHQ-4",
     y = "Weighted count"
   ) +
-  main_theme(base_size = 13)
+  main_theme(base_size = 15)
 
-p_expected_and_residual <- p_expected_distribution + p_residual_distribution +
-  patchwork::plot_layout(ncol = 2)
+# ------------------------------------------------------------
+# 12.5 Residual position distribution
+# ------------------------------------------------------------
 
 p_residual_position <- ggplot2::ggplot(
   residual_position_distribution,
@@ -1072,7 +1150,11 @@ p_residual_position <- ggplot2::ggplot(
     x = NULL,
     y = "Weighted percentage"
   ) +
-  main_theme(base_size = 13)
+  main_theme(base_size = 15)
+
+# ------------------------------------------------------------
+# 12.6 Expected tercile distribution
+# ------------------------------------------------------------
 
 p_expected_terciles <- ggplot2::ggplot(
   expected_tercile_distribution,
@@ -1090,12 +1172,16 @@ p_expected_terciles <- ggplot2::ggplot(
   ) +
   ggplot2::scale_y_continuous(labels = function(x) paste0(x, "%")) +
   ggplot2::labs(
-    title = "Objective-position expected PHQ-4 terciles",
+    title = "Objective-position-expected PHQ-4 terciles",
     subtitle = "Terciles of predicted distress from the expanded objective-position model",
     x = NULL,
     y = "Weighted percentage"
   ) +
-  main_theme(base_size = 13)
+  main_theme(base_size = 15)
+
+# ------------------------------------------------------------
+# 12.7 Observed, expected and residual PHQ-4 by objective position
+# ------------------------------------------------------------
 
 observed_expected_plot_data <- observed_expected_residual_by_objective %>%
   dplyr::filter(
@@ -1128,7 +1214,7 @@ p_observed_expected_residual <- ggplot2::ggplot(
     color = metric
   )
 ) +
-  ggplot2::geom_point(size = 3.0) +
+  ggplot2::geom_point(size = 3.3) +
   ggplot2::facet_grid(
     metric ~ group_var_label,
     scales = "free",
@@ -1148,17 +1234,14 @@ p_observed_expected_residual <- ggplot2::ggplot(
     x = "Weighted mean",
     y = NULL
   ) +
-  main_theme(base_size = 11)
+  main_theme(base_size = 12)
 
 
-# ------------------------------------------------------------
-# 12. Export outputs
-# ------------------------------------------------------------
+# ============================================================
+# 13. Export outputs
+# ============================================================
 
-output_excel <- file.path(
-  script_tables_dir,
-  "03_objective_gradient_residual_tables.xlsx"
-)
+output_excel <- file.path(output_tables_dir, "03_objective_gradient_residual_tables.xlsx")
 
 openxlsx::write.xlsx(
   list(
@@ -1169,7 +1252,6 @@ openxlsx::write.xlsx(
     residual_diagnostics = residual_diagnostics,
     residual_position = residual_position_distribution,
     residual_position_075 = residual_position_075_distribution,
-    residual_position_100 = residual_position_100_distribution,
     expected_terciles = expected_tercile_distribution,
     obs_exp_resid_corr = observed_expected_residual_correlations,
     phq4_gradients = phq4_objective_gradients,
@@ -1181,83 +1263,59 @@ openxlsx::write.xlsx(
 
 readr::write_csv(
   model_sample_summary,
-  file.path(script_csv_dir, "03_model_sample_summary.csv")
+  file.path(output_csv_dir, "03_model_sample_summary.csv")
 )
 
 readr::write_csv(
   model_variable_check,
-  file.path(script_csv_dir, "03_model_variable_check.csv")
+  file.path(output_csv_dir, "03_model_variable_check.csv")
 )
 
 readr::write_csv(
   model_fit,
-  file.path(script_csv_dir, "03_objective_model_fit.csv")
+  file.path(output_csv_dir, "03_objective_model_fit.csv")
 )
 
 readr::write_csv(
   model_coefficients,
-  file.path(script_csv_dir, "03_objective_model_coefficients.csv")
+  file.path(output_csv_dir, "03_objective_model_coefficients.csv")
 )
 
 readr::write_csv(
   residual_diagnostics,
-  file.path(script_csv_dir, "03_residual_diagnostics.csv")
+  file.path(output_csv_dir, "03_residual_diagnostics.csv")
 )
 
 readr::write_csv(
   observed_expected_residual_correlations,
-  file.path(script_csv_dir, "03_observed_expected_residual_correlations.csv")
+  file.path(output_csv_dir, "03_observed_expected_residual_correlations.csv")
 )
 
 readr::write_csv(
   residual_position_distribution,
-  file.path(script_csv_dir, "03_residual_position_distribution.csv")
-)
-
-readr::write_csv(
-  residual_position_075_distribution,
-  file.path(script_csv_dir, "03_residual_position_075_distribution.csv")
-)
-
-readr::write_csv(
-  residual_position_100_distribution,
-  file.path(script_csv_dir, "03_residual_position_100_distribution.csv")
+  file.path(output_csv_dir, "03_residual_position_distribution.csv")
 )
 
 readr::write_csv(
   expected_tercile_distribution,
-  file.path(script_csv_dir, "03_expected_tercile_distribution.csv")
+  file.path(output_csv_dir, "03_expected_tercile_distribution.csv")
 )
 
 readr::write_csv(
   phq4_objective_gradients,
-  file.path(script_csv_dir, "03_phq4_objective_gradients.csv")
+  file.path(output_csv_dir, "03_phq4_objective_gradients.csv")
 )
 
 readr::write_csv(
   observed_expected_residual_by_objective,
-  file.path(script_csv_dir, "03_observed_expected_residual_by_objective.csv")
+  file.path(output_csv_dir, "03_observed_expected_residual_by_objective.csv")
 )
 
-analytic_residual_path <- file.path(
-  script_rds_dir,
-  "03_objective_gradient_residual_dataset.rds"
-)
+analytic_residual_path <- file.path(output_rds_dir, "03_objective_gradient_residual_dataset.rds")
+saveRDS(analytic_residual, analytic_residual_path)
 
-saveRDS(
-  analytic_residual,
-  analytic_residual_path
-)
-
-model_objects_path <- file.path(
-  script_rds_dir,
-  "03_objective_model_objects.rds"
-)
-
-saveRDS(
-  model_objects,
-  model_objects_path
-)
+model_objects_path <- file.path(output_rds_dir, "03_objective_model_objects.rds")
+saveRDS(model_objects, model_objects_path)
 
 objective_model_metadata <- list(
   script_name = script_name,
@@ -1268,92 +1326,75 @@ objective_model_metadata <- list(
   m2_vars = m2_vars,
   m3_vars = m3_vars,
   residual_cutoff_primary_sd = 0.50,
-  residual_cutoff_sensitivity_075_sd = 0.75,
-  residual_cutoff_sensitivity_100_sd = 1.00,
+  residual_cutoff_sensitivity_sd = 0.75,
   residual_mean_weighted = residual_mean_weighted,
   residual_sd_weighted = residual_sd_weighted,
   expected_tercile_breaks = expected_tercile_breaks,
   model_fit = model_fit
 )
 
-metadata_path <- file.path(
-  script_rds_dir,
-  "03_objective_model_metadata.rds"
-)
-
-saveRDS(
-  objective_model_metadata,
-  metadata_path
-)
+metadata_path <- file.path(output_rds_dir, "03_objective_model_metadata.rds")
+saveRDS(objective_model_metadata, metadata_path)
 
 ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_objective_model_r2.png"),
+  filename = file.path(output_figures_dir, "03_objective_model_r2.png"),
   plot = p_model_fit,
-  width = 11,
-  height = 7,
+  width = 12,
+  height = 8,
   dpi = 300,
   bg = "white"
 )
 
 ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_objective_gradient_phq4.png"),
+  filename = file.path(output_figures_dir, "03_objective_gradient_phq4.png"),
   plot = p_objective_gradient,
-  width = 13,
-  height = 10,
-  dpi = 300,
-  bg = "white"
-)
-
-ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_expected_phq4_distribution.png"),
-  plot = p_expected_distribution,
-  width = 10,
-  height = 7,
-  dpi = 300,
-  bg = "white"
-)
-
-ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_residual_phq4_distribution.png"),
-  plot = p_residual_distribution,
-  width = 10,
-  height = 7,
-  dpi = 300,
-  bg = "white"
-)
-
-ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_expected_and_residual_phq4_distribution.png"),
-  plot = p_expected_and_residual,
-  width = 14,
-  height = 6.5,
-  dpi = 300,
-  bg = "white"
-)
-
-ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_residual_position_distribution.png"),
-  plot = p_residual_position,
-  width = 10,
-  height = 7,
-  dpi = 300,
-  bg = "white"
-)
-
-ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_expected_tercile_distribution.png"),
-  plot = p_expected_terciles,
-  width = 10,
-  height = 7,
-  dpi = 300,
-  bg = "white"
-)
-
-ggplot2::ggsave(
-  filename = file.path(script_figures_dir, "03_observed_expected_residual_by_objective_position.png"),
-  plot = p_observed_expected_residual,
-  width = 16,
+  width = 15,
   height = 12,
+  dpi = 300,
+  bg = "white"
+)
+
+ggplot2::ggsave(
+  filename = file.path(output_figures_dir, "03_expected_phq4_distribution.png"),
+  plot = p_expected_distribution,
+  width = 12,
+  height = 8,
+  dpi = 300,
+  bg = "white"
+)
+
+ggplot2::ggsave(
+  filename = file.path(output_figures_dir, "03_residual_phq4_distribution.png"),
+  plot = p_residual_distribution,
+  width = 12,
+  height = 8,
+  dpi = 300,
+  bg = "white"
+)
+
+ggplot2::ggsave(
+  filename = file.path(output_figures_dir, "03_residual_position_distribution.png"),
+  plot = p_residual_position,
+  width = 12,
+  height = 8,
+  dpi = 300,
+  bg = "white"
+)
+
+ggplot2::ggsave(
+  filename = file.path(output_figures_dir, "03_expected_tercile_distribution.png"),
+  plot = p_expected_terciles,
+  width = 12,
+  height = 8,
+  dpi = 300,
+  bg = "white"
+)
+
+ggplot2::ggsave(
+  filename = file.path(output_figures_dir, "03_observed_expected_residual_by_objective_position.png"),
+  plot = p_observed_expected_residual,
+  width = 18,
+  height = 13,
   dpi = 300,
   bg = "white"
 )
@@ -1370,7 +1411,6 @@ manifest <- tibble::tibble(
     "Objective gradient figure",
     "Expected PHQ-4 distribution figure",
     "Residual PHQ-4 distribution figure",
-    "Expected and residual PHQ-4 distribution figure",
     "Residual position distribution figure",
     "Expected tercile distribution figure",
     "Observed expected residual by objective-position figure"
@@ -1380,60 +1420,54 @@ manifest <- tibble::tibble(
     analytic_residual_path,
     model_objects_path,
     metadata_path,
-    file.path(script_csv_dir, "03_objective_model_fit.csv"),
-    file.path(script_csv_dir, "03_objective_model_coefficients.csv"),
-    file.path(script_csv_dir, "03_residual_diagnostics.csv"),
-    file.path(script_figures_dir, "03_objective_gradient_phq4.png"),
-    file.path(script_figures_dir, "03_expected_phq4_distribution.png"),
-    file.path(script_figures_dir, "03_residual_phq4_distribution.png"),
-    file.path(script_figures_dir, "03_expected_and_residual_phq4_distribution.png"),
-    file.path(script_figures_dir, "03_residual_position_distribution.png"),
-    file.path(script_figures_dir, "03_expected_tercile_distribution.png"),
-    file.path(script_figures_dir, "03_observed_expected_residual_by_objective_position.png")
+    file.path(output_csv_dir, "03_objective_model_fit.csv"),
+    file.path(output_csv_dir, "03_objective_model_coefficients.csv"),
+    file.path(output_csv_dir, "03_residual_diagnostics.csv"),
+    file.path(output_figures_dir, "03_objective_gradient_phq4.png"),
+    file.path(output_figures_dir, "03_expected_phq4_distribution.png"),
+    file.path(output_figures_dir, "03_residual_phq4_distribution.png"),
+    file.path(output_figures_dir, "03_residual_position_distribution.png"),
+    file.path(output_figures_dir, "03_expected_tercile_distribution.png"),
+    file.path(output_figures_dir, "03_observed_expected_residual_by_objective_position.png")
   )
 )
 
 readr::write_csv(
   manifest,
-  file.path(script_csv_dir, "03_output_manifest.csv")
+  file.path(output_csv_dir, "03_output_manifest.csv")
 )
 
 
-# ------------------------------------------------------------
-# 13. Save session information
-# ------------------------------------------------------------
+# ============================================================
+# 14. Save session information
+# ============================================================
+
+session_info_text <- capture.output(sessionInfo())
 
 writeLines(
-  capture.output(sessionInfo()),
-  con = file.path(script_logs_dir, "03_session_info.txt")
+  session_info_text,
+  con = file.path(output_logs_dir, "03_session_info.txt")
 )
 
 
-# ------------------------------------------------------------
-# 14. Console summary
-# ------------------------------------------------------------
+# ============================================================
+# 15. Console summary
+# ============================================================
 
 message("\n============================================================")
-message("03_objective_gradient_residual_phq4.R completed")
+message("03 objective gradient and residual PHQ-4 completed")
 message("============================================================")
 message("Input file: ", input_rds)
-message("Output folder: ", script_output_dir)
+message("Output folder: ", output_dir)
 message("Expanded objective model sample n: ", sum(analytic_residual$objective_model_complete))
-message(
-  "Valid observed/expected/residual PHQ-4 n: ",
-  residual_diagnostics$n_valid_observed_expected_residual[1]
-)
-message(
-  "M3 weighted R-squared: ",
-  round(model_fit$r2_weighted[model_fit$model == "M3 Expanded objective position"] * 100, 2),
-  "%"
-)
+message("Valid observed/expected/residual PHQ-4 n: ", residual_diagnostics$n_valid_observed_expected_residual[1])
+message("M3 weighted R-squared: ", round(model_fit$r2_weighted[model_fit$model == "M3 Expanded objective position"] * 100, 2), "%")
 message("Weighted residual SD: ", round(residual_sd_weighted, 3))
 message("Primary residual threshold: +/- 0.50 SD")
-message("Sensitivity residual thresholds: +/- 0.75 SD and +/- 1.00 SD")
+message("Sensitivity residual threshold: +/- 0.75 SD")
 message("Residual dataset: ", analytic_residual_path)
 message("Excel diagnostics: ", output_excel)
-message("Figures saved in: ", script_figures_dir)
-message("CSV outputs saved in: ", script_csv_dir)
-message("RDS outputs saved in: ", script_rds_dir)
+message("Figures saved in: ", output_figures_dir)
+message("CSV outputs saved in: ", output_csv_dir)
+message("RDS outputs saved in: ", output_rds_dir)
 message("============================================================\n")
